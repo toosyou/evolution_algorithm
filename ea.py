@@ -4,6 +4,7 @@ import copy
 import matplotlib.pyplot as plt
 from numba import jit
 import better_exceptions
+from itertools import chain
 
 datasets = {
     'lineN100M4':{
@@ -28,26 +29,6 @@ def get_data(filename='lineN100M4.txt'):
             x.append(float(line.split()[0]))
             y.append(float(line.split()[1]))
     return np.array(x), np.array(y)
-
-@jit
-def distance(p, line_p, line_vector):
-    '''
-                 p
-                ^
-               /
-        va    /
-             /
-            /
-    line_p -------------------------------> line_vector
-    '''
-
-    va = p - line_p
-    va_length = np.sqrt(va.dot(va))
-    line_vector_length = np.sqrt(line_vector.dot(line_vector))
-    cos = ( va.dot(line_vector) ) / ( va_length * line_vector_length )
-    sin = np.sqrt( 1. - cos*cos)
-
-    return va_length * sin
 
 class Individual:
     def __init__(self, init_genes):
@@ -74,7 +55,30 @@ class IndividualP1(Individual):
         super(IndividualP1, self).__init__(init_genes)
         self.n_lines = n_lines
 
+    @staticmethod
+    def born(n_points, n_lines):
+        return IndividualP1( np.random.choice(n_lines, n_points, replace=True), n_lines )
+
     def fitness(self, x, y):
+        def distance(p, line_p, line_vector):
+            '''
+                         p
+                        ^
+                       /
+                va    /
+                     /
+                    /
+            line_p -------------------------------> line_vector
+            '''
+
+            va = p - line_p
+            va_length = np.sqrt(va.dot(va))
+            line_vector_length = np.sqrt(line_vector.dot(line_vector))
+            cos = ( va.dot(line_vector) ) / ( va_length * line_vector_length )
+            sin = np.sqrt( 1. - cos*cos)
+
+            return va_length * sin
+
         line_points = [ list() for _ in range(self.n_lines) ]
         for index_line, xi, yi in zip(self.genes, x, y):
             line_points[index_line].append([xi, yi])
@@ -99,18 +103,55 @@ class IndividualP1(Individual):
 
         return IndividualP1(child_genes, self.n_lines)
 
-def presentation_1_solver(filename='lineN100M4', n_population=100, n_generation=1000, keep_ratio=0.3, mutation_ratio=0.05):
+class IndividualP2(Individual):
+    def __init__(self, init_genes):
+        super(IndividualP2, self).__init__(init_genes)
+
+    @staticmethod
+    def born(n_points, n_lines):
+        gene = [ [np.random.random() * 2. * np.pi, np.random.random() * 10.] for _ in range(n_lines) ]
+        gene = list(chain.from_iterable(gene)) # flatten
+        return IndividualP2( gene )
+
+    def fitness(self, x, y):
+        def distance(xi, yi, theta, rho):
+            return abs( xi * np.cos(theta) + yi * np.sin(theta) - rho )
+
+        total_distance = 0.
+        for xi, yi in zip(x, y):
+            distances = [ distance(xi, yi, theta, rho) for theta, rho in zip(self.genes[::2], self.genes[1::2]) ]
+            total_distance += min(distances)
+
+        return -1. * total_distance
+
+    def sex_with(self, another_guy):
+        return IndividualP2(super(IndividualP2, self).sex_with(another_guy).genes)
+
+    def mutated(self, mutation_ratio):
+        child_genes = copy.copy(self.genes)
+        for index_gene, gene in enumerate(child_genes):
+            if np.random.random() < mutation_ratio: # do mutate
+                child_genes[index_gene] += np.random.random() - 0.5
+
+        return IndividualP2(child_genes)
+
+def evolve(IndividualType=IndividualP1, filename='lineN100M4', n_population=500, n_generation=1000, keep_ratio=0.2, mutation_ratio=0.1):
     x, y = get_data('{}.txt'.format(filename))
     n_lines = datasets[filename]['M']
+    n_points = x.shape[0]
 
     # init polulation
-    population = np.array([ IndividualP1( np.random.choice(n_lines, x.shape[0], replace=True), n_lines ) for _ in range(n_population) ])
+    population = np.array([ IndividualType.born(n_points, n_lines) for _ in range(n_population) ])
 
     # from one generation to the next
     for index_generation in range(n_generation):
         # get fitness
         fitnesses = np.array([ p.fitness(x, y) for p in population ])
         population = population[ fitnesses.argsort()[::-1] ] # sort by fitness in desc order
+        print('Generation:', index_generation, 'Maximun_fitness:', fitnesses.max())
+
+        if index_generation == n_generation - 1: # the last gen
+            return population[0] # fits the most
 
         # selection
         population = population[ :int(n_population*keep_ratio) ]
@@ -120,7 +161,7 @@ def presentation_1_solver(filename='lineN100M4', n_population=100, n_generation=
 
         # mutation
         population = np.array([ p.mutated(mutation_ratio) for p in population ])
-        print('Generation:', index_generation, 'Maximun_fitness:', fitnesses.max())
+
 
 if __name__ == '__main__':
-    presentation_1_solver()
+    evolve()
