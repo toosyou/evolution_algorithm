@@ -1,10 +1,10 @@
 import numpy as np
 from sklearn.decomposition import PCA
 import copy
-import matplotlib.pyplot as plt
-from numba import jit
 import better_exceptions
 from itertools import chain
+from tqdm import tqdm
+import sys
 
 datasets = {
     'lineN100M4':{
@@ -33,6 +33,7 @@ def get_data(filename='lineN100M4.txt'):
 class Individual:
     def __init__(self, init_genes):
         self.genes = np.array(init_genes)
+        self.fitness = 0.
 
     def sex_with(self, another_guy):
         child_gene = list()
@@ -59,7 +60,7 @@ class IndividualP1(Individual):
     def born(n_points, n_lines):
         return IndividualP1( np.random.choice(n_lines, n_points, replace=True), n_lines )
 
-    def fitness(self, x, y):
+    def cal_fitness(self, x, y):
         def distance(p, line_p, line_vector):
             '''
                          p
@@ -85,12 +86,14 @@ class IndividualP1(Individual):
 
         total_distance = 0.
         for points in line_points: # for each line
+            if not len(points): continue # prevent exploding
             pca = PCA(n_components=2).fit(points)
             main_components, mean = pca.components_[0], pca.mean_
             for p in points:
                 total_distance += distance(p, mean, main_components)
 
-        return -1. * total_distance
+        self.fitness = -1. * total_distance
+        return None
 
     def sex_with(self, another_guy):
         return IndividualP1(super(IndividualP1, self).sex_with(another_guy).genes, self.n_lines)
@@ -113,7 +116,7 @@ class IndividualP2(Individual):
         gene = list(chain.from_iterable(gene)) # flatten
         return IndividualP2( gene )
 
-    def fitness(self, x, y):
+    def cal_fitness(self, x, y):
         def distance(xi, yi, theta, rho):
             return abs( xi * np.cos(theta) + yi * np.sin(theta) - rho )
 
@@ -122,7 +125,8 @@ class IndividualP2(Individual):
             distances = [ distance(xi, yi, theta, rho) for theta, rho in zip(self.genes[::2], self.genes[1::2]) ]
             total_distance += min(distances)
 
-        return -1. * total_distance
+        self.fitness = -1. * total_distance
+        return None
 
     def sex_with(self, another_guy):
         return IndividualP2(super(IndividualP2, self).sex_with(another_guy).genes)
@@ -135,10 +139,13 @@ class IndividualP2(Individual):
 
         return IndividualP2(child_genes)
 
-def evolve(IndividualType=IndividualP1, filename='lineN100M4', n_population=500, n_generation=1000, keep_ratio=0.2, mutation_ratio=0.1):
+def evolve(IndividualType=IndividualP1, filename='lineN100M4', n_population=500, n_generation=100, keep_ratio=0.2, mutation_ratio=0.1, verbose=True):
     x, y = get_data('{}.txt'.format(filename))
     n_lines = datasets[filename]['M']
     n_points = x.shape[0]
+    history = {
+        'fitness': list()
+    }
 
     # init polulation
     population = np.array([ IndividualType.born(n_points, n_lines) for _ in range(n_population) ])
@@ -146,22 +153,42 @@ def evolve(IndividualType=IndividualP1, filename='lineN100M4', n_population=500,
     # from one generation to the next
     for index_generation in range(n_generation):
         # get fitness
-        fitnesses = np.array([ p.fitness(x, y) for p in population ])
-        population = population[ fitnesses.argsort()[::-1] ] # sort by fitness in desc order
-        print('Generation:', index_generation, 'Maximun_fitness:', fitnesses.max())
+        for p in population: p.cal_fitness(x, y)
+        population = sorted(population, key=lambda p: p.fitness)[::-1] # sort by fitness in desc order
+        history['fitness'].append(population[0].fitness)
+
+        if verbose:
+            print('Generation:', index_generation, 'Maximun_fitness:', population[0].fitness, file=sys.stderr)
 
         if index_generation == n_generation - 1: # the last gen
-            return population[0] # fits the most
+            return population[0], history # fits the most
 
         # selection
         population = population[ :int(n_population*keep_ratio) ]
 
         # sex party
-        population = np.array([ a.sex_with(b) for a, b in zip(np.random.choice(population, n_population), np.random.choice(population, n_population)) ])
+        population = np.array([ a.sex_with(b) for a, b in zip(
+                        np.random.choice(population, n_population),
+                        np.random.choice(population, n_population))
+                        ])
 
         # mutation
         population = np.array([ p.mutated(mutation_ratio) for p in population ])
 
-
 if __name__ == '__main__':
-    evolve()
+    filenames = ["lineN100M4", "lineN200M3", "lineN300M5"]
+
+    for fn in filenames[:2]:
+        # matic parameters, don't touch it
+        print(evolve(IndividualP1, filename=fn,
+                        n_population=500,
+                        n_generation=150,
+                        keep_ratio=0.009,
+                        mutation_ratio=0.05,
+                        verbose=True))
+    print(evolve(IndividualP1, filename='lineN300M5',
+                    n_population=500,
+                    n_generation=200,
+                    keep_ratio=0.05,
+                    mutation_ratio=0.01,
+                    verbose=True))
